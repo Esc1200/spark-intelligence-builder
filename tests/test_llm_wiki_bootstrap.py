@@ -36,6 +36,7 @@ class LlmWikiBootstrapTests(SparkTestCase):
         self.assertIn("projects/index.md", result.created_files)
         self.assertIn("improvements/index.md", result.created_files)
         self.assertIn("system/spark-self-awareness-contract.md", result.created_files)
+        self.assertIn("system/observability-spine-runtime-state.md", result.created_files)
         self.assertIn("memory/llm-wiki-memory-policy.md", result.created_files)
 
         self_awareness = (self.home / "wiki" / "system" / "spark-self-awareness-contract.md").read_text(
@@ -44,6 +45,12 @@ class LlmWikiBootstrapTests(SparkTestCase):
         self.assertIn("authority: supporting_not_authoritative", self_awareness)
         self.assertIn("observed_now", self_awareness)
         self.assertIn("Live `self status`", self_awareness)
+        runtime_state = (self.home / "wiki" / "system" / "observability-spine-runtime-state.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Spark is not only a chat surface", runtime_state)
+        self.assertIn("observed_now", runtime_state)
+        self.assertIn("Access permission is not runner capability", runtime_state)
         user_index = (self.home / "wiki" / "user" / "index.md").read_text(encoding="utf-8")
         self.assertIn("wiki/users/<human>/", user_index)
         self.assertIn("User notes do not become global Spark doctrine", user_index)
@@ -345,6 +352,7 @@ class LlmWikiBootstrapTests(SparkTestCase):
         self.assertIn("index.md", page_paths)
         self.assertIn("system/index.md", page_paths)
         self.assertIn("routes/index.md", page_paths)
+        self.assertIn("system/observability-spine-runtime-state.md", page_paths)
         self.assertIn("tools/index.md", page_paths)
         self.assertIn("user/index.md", page_paths)
         self.assertIn("projects/index.md", page_paths)

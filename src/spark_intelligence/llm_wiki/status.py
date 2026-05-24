@@ -22,6 +22,7 @@ BOOTSTRAP_WIKI_FILES: tuple[str, ...] = (
     "system/spark-system-map.md",
     "system/natural-language-route-map.md",
     "system/tracing-and-observability-map.md",
+    "system/observability-spine-runtime-state.md",
     "system/recursive-self-improvement-loops.md",
     "routes/index.md",
     "memory/llm-wiki-memory-policy.md",
