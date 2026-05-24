@@ -4,6 +4,9 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -30,6 +33,8 @@ LEGACY_BROWSER_REPLACEMENT_SURFACE = "spark-cli browser-use agent"
 BROWSER_USE_BACKEND_KIND = "browser_use_adapter"
 BROWSER_USE_BACKEND_LABEL = "Browser-use Adapter"
 BROWSER_USE_STATUS_ENV = "SPARK_BROWSER_USE_STATUS_PATH"
+BROWSER_USE_DOCTOR_TIMEOUT_SECONDS = 20
+_BROWSER_USE_REQUIRED_DOCTOR_CHECKS = {"browser", "network", "package"}
 _BROWSER_USE_READY_STATUSES = {
     "ready",
     "running",
@@ -81,7 +86,7 @@ def collect_browser_use_adapter_status(config_manager: ConfigManager) -> dict[st
     status_path = _browser_use_status_path(config_manager, browser_use_config)
     status_doc = _read_browser_use_status(status_path)
     package_available = importlib.util.find_spec("browser_use") is not None
-    cli_path = shutil.which("browser-use") or shutil.which("browser_use")
+    cli_path = _browser_use_cli_path()
     configured = bool(browser_use_config) or status_path is not None or package_available or bool(cli_path)
     if not configured and not status_doc:
         return None
@@ -122,13 +127,20 @@ def collect_browser_use_adapter_status(config_manager: ConfigManager) -> dict[st
 
 
 def collect_browser_use_probe_contract(config_manager: ConfigManager) -> dict[str, Any]:
+    config = config_manager.load()
+    browser_use_config = _browser_use_config(config)
+    status_path = _browser_use_status_path(config_manager, browser_use_config) or _browser_use_default_status_path(config_manager)
+    cli_path = _browser_use_cli_path()
+    if cli_path:
+        _refresh_browser_use_status_from_cli(status_path=status_path, cli_path=cli_path)
+
     status = collect_browser_use_adapter_status(config_manager)
     if status is not None:
         return status
 
     status_path = _browser_use_default_status_path(config_manager)
     package_available = importlib.util.find_spec("browser_use") is not None
-    cli_path = shutil.which("browser-use") or shutil.which("browser_use")
+    cli_path = _browser_use_cli_path()
     failure_reason = "browser-use adapter status source is not ready."
     return {
         "status": "missing_status",
@@ -533,6 +545,149 @@ def _browser_use_status_path(config_manager: ConfigManager, config: dict[str, An
         if candidate.exists():
             return candidate
     return candidates[0] if explicit else None
+
+
+def _browser_use_cli_path() -> str | None:
+    discovered = shutil.which("browser-use") or shutil.which("browser_use")
+    if discovered:
+        return discovered
+
+    executable_dir = Path(sys.executable).resolve(strict=False).parent
+    candidates = [
+        executable_dir / "browser-use.exe",
+        executable_dir / "browser_use.exe",
+        executable_dir / "browser-use",
+        executable_dir / "browser_use",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _refresh_browser_use_status_from_cli(*, status_path: Path, cli_path: str) -> dict[str, Any]:
+    checked_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    try:
+        completed = subprocess.run(
+            [cli_path, "--json", "doctor"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            text=True,
+            timeout=BROWSER_USE_DOCTOR_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        status_doc = _browser_use_doctor_failure_doc(
+            checked_at=checked_at,
+            cli_path=cli_path,
+            reason=f"browser-use doctor failed to run: {exc}",
+            error_code="BROWSER_USE_DOCTOR_UNAVAILABLE",
+        )
+        _write_browser_use_status(status_path, status_doc)
+        return status_doc
+
+    stdout = (completed.stdout or "").strip()
+    try:
+        doctor = json.loads(stdout) if stdout else {}
+    except json.JSONDecodeError:
+        doctor = {}
+
+    if not isinstance(doctor, dict):
+        doctor = {}
+
+    if completed.returncode != 0 or not doctor:
+        stderr = (completed.stderr or "").strip()
+        reason = stderr or stdout or f"browser-use doctor exited with code {completed.returncode}"
+        status_doc = _browser_use_doctor_failure_doc(
+            checked_at=checked_at,
+            cli_path=cli_path,
+            reason=reason,
+            error_code="BROWSER_USE_DOCTOR_FAILED",
+        )
+        _write_browser_use_status(status_path, status_doc)
+        return status_doc
+
+    status_doc = _browser_use_status_from_doctor(doctor, checked_at=checked_at, cli_path=cli_path)
+    _write_browser_use_status(status_path, status_doc)
+    return status_doc
+
+
+def _browser_use_status_from_doctor(doctor: dict[str, Any], *, checked_at: str, cli_path: str) -> dict[str, Any]:
+    checks = doctor.get("checks") if isinstance(doctor.get("checks"), dict) else {}
+    missing_required = [
+        name
+        for name in sorted(_BROWSER_USE_REQUIRED_DOCTOR_CHECKS)
+        if not _browser_use_doctor_check_ok(checks.get(name))
+    ]
+    limitations = [
+        _browser_use_doctor_check_message(name, check)
+        for name, check in sorted(checks.items())
+        if name not in _BROWSER_USE_REQUIRED_DOCTOR_CHECKS and not _browser_use_doctor_check_ok(check)
+    ]
+    limitations = [limitation for limitation in limitations if limitation]
+    ready = not missing_required
+    failure_reason = None
+    if not ready:
+        failure_reason = "browser-use doctor required checks failed: " + ", ".join(missing_required)
+    return {
+        "status": "ready" if ready else "failed",
+        "ready": ready,
+        "checked_at": checked_at,
+        "last_success_at": checked_at if ready else None,
+        "last_failure_at": None if ready else checked_at,
+        "last_failure_reason": failure_reason,
+        "error_code": None if ready else "BROWSER_USE_DOCTOR_REQUIRED_CHECK_FAILED",
+        "cli_path": cli_path,
+        "doctor_status": _string_or_none(doctor.get("status")),
+        "doctor_summary": _string_or_none(doctor.get("summary")),
+        "checks": checks,
+        "limitations": limitations,
+        "provenance": {
+            "source": "browser-use --json doctor",
+            "cli_path": cli_path,
+        },
+    }
+
+
+def _browser_use_doctor_check_ok(check: object) -> bool:
+    if not isinstance(check, dict):
+        return False
+    return str(check.get("status") or "").strip().lower() in {"ok", "ready", "success", "passed"}
+
+
+def _browser_use_doctor_check_message(name: str, check: object) -> str | None:
+    if not isinstance(check, dict):
+        return f"{name}: missing check payload"
+    message = _string_or_none(check.get("message")) or _string_or_none(check.get("fix"))
+    if not message:
+        return None
+    return f"{name}: {message}"
+
+
+def _browser_use_doctor_failure_doc(*, checked_at: str, cli_path: str, reason: str, error_code: str) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "ready": False,
+        "checked_at": checked_at,
+        "last_success_at": None,
+        "last_failure_at": checked_at,
+        "last_failure_reason": reason,
+        "error_code": error_code,
+        "cli_path": cli_path,
+        "provenance": {
+            "source": "browser-use --json doctor",
+            "cli_path": cli_path,
+        },
+    }
+
+
+def _write_browser_use_status(path: Path, status_doc: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(status_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        return
 
 
 def _browser_use_default_status_path(config_manager: ConfigManager) -> Path:
