@@ -58,7 +58,7 @@ class CliSmokeTests(SparkTestCase):
             ).fetchone()
         self.assertIsNotNone(row)
 
-    def test_browser_status_command_reports_governed_runtime_posture(self) -> None:
+    def test_browser_status_command_blocks_legacy_browser_chip(self) -> None:
         chip_root = create_fake_hook_chip(self.home, chip_key="spark-browser")
         self.config_manager.set_path("spark.chips.roots", [str(chip_root)])
 
@@ -78,14 +78,12 @@ class CliSmokeTests(SparkTestCase):
             str(self.home),
             "--json",
         )
-        self.assertEqual(exit_code, 0, stderr)
-        payload = json.loads(stdout)
-        self.assertEqual(payload["status"], "completed")
-        self.assertEqual(payload["hook"], "browser.status")
-        self.assertEqual(payload["result"]["browser"]["family"], "brave")
-        self.assertEqual(payload["result"]["profile"]["key"], "spark-default")
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("legacy browser extension lane is disabled", stderr)
+        self.assertIn("browser-use MCP lane", stderr)
 
-    def test_browser_page_snapshot_command_reports_bounded_snapshot(self) -> None:
+    def test_browser_page_snapshot_command_blocks_legacy_browser_chip(self) -> None:
         chip_root = create_fake_hook_chip(self.home, chip_key="spark-browser")
         self.config_manager.set_path("spark.chips.roots", [str(chip_root)])
 
@@ -107,13 +105,10 @@ class CliSmokeTests(SparkTestCase):
             "https://docs.example.com/guide",
             "--json",
         )
-        self.assertEqual(exit_code, 0, stderr)
-        payload = json.loads(stdout)
-        self.assertEqual(payload["status"], "completed")
-        self.assertEqual(payload["hook"], "browser.page.snapshot")
-        self.assertEqual(payload["result"]["title"], "Spark Browser Guide")
-        self.assertEqual(payload["result"]["origin"], "https://docs.example.com/guide")
-        self.assertEqual(payload["artifacts"][0]["type"], "page_snapshot")
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("legacy browser extension lane is disabled", stderr)
+        self.assertIn("browser-use MCP lane", stderr)
 
     def test_browser_page_snapshot_command_falls_back_to_navigate_wait_for_live_page_context(self) -> None:
         snapshot_failure = SimpleNamespace(
