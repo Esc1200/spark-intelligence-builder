@@ -5969,7 +5969,8 @@ def _memory_doctor_distress_signals(simplified_text: str) -> list[dict[str, obje
     if re.search(r"\b(?:why|what|where|how come|did you|do you|can you)\b", text):
         signals.append({"name": "diagnostic_question", "weight": 1})
     if re.search(
-        r"\b(?:not\s+[a-z][a-z0-9_-]*|wrong\s+name|that(?:s|'s)?\s+not\s+my\s+name|you\s+called\s+me\s+\w+)\b",
+        r"\b(?:wrong\s+name|that(?:\s+s)?\s+not\s+my\s+name|you\s+called\s+me\s+\w+"
+        r"|that(?:\s+s)?\s+not\s+(?:right|correct|my\s+name)|my\s+name\s+is\s+not)\b",
         text,
     ):
         signals.append({"name": "identity_correction_after_wrong_name", "weight": 2})
