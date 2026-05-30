@@ -6551,10 +6551,10 @@ def _detect_context_source_debug_query(user_message: str) -> bool:
     text = re.sub(r"\s+", " ", str(user_message or "").strip().lower())
     if not text:
         return False
-    if re.search(r"\bwhy\s+did\s+you\s+(answer|say|reply|respond)\s+(that|this)\b", text):
-        return True
-    if re.search(r"\bwhy\s+was\s+that\s+your\s+(answer|reply|response)\b", text):
-        return True
+    # NOTE: broad "why did you say/answer that" patterns removed — they catch
+    # conversational follow-ups asking for *reasoning* (e.g. "Why did you say
+    # that?") which should get a natural reply, not a route-explanation dump.
+    # Only match when the user explicitly asks about sources, context, or memory.
     source_markers = (
         "what sources did you use",
         "what memory sources",
