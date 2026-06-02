@@ -2997,19 +2997,48 @@ def resolve_researcher_config_path(config_manager: ConfigManager, runtime_root: 
 
 
 def _import_build_advisory(runtime_root: Path):
-    src_root = runtime_root / "src"
-    if str(src_root) not in sys.path:
-        sys.path.insert(0, str(src_root))
-    module = importlib.import_module("spark_researcher.advisory")
+    module = _import_researcher_module(runtime_root, "spark_researcher.advisory")
     return getattr(module, "build_advisory")
 
 
 def _import_execute_with_research(runtime_root: Path):
+    module = _import_researcher_module(runtime_root, "spark_researcher.research")
+    return getattr(module, "execute_with_research")
+
+
+def _import_researcher_module(runtime_root: Path, module_name: str):
     src_root = runtime_root / "src"
+    src_root_resolved = src_root.resolve(strict=False)
+    _evict_researcher_modules_from_other_roots(src_root_resolved)
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
-    module = importlib.import_module("spark_researcher.research")
-    return getattr(module, "execute_with_research")
+    importlib.invalidate_caches()
+    return importlib.import_module(module_name)
+
+
+def _evict_researcher_modules_from_other_roots(src_root: Path) -> None:
+    package = sys.modules.get("spark_researcher")
+    if package is None or _module_loaded_from_root(package, src_root):
+        return
+    for name in ("spark_researcher.advisory", "spark_researcher.research", "spark_researcher"):
+        sys.modules.pop(name, None)
+
+
+def _module_loaded_from_root(module: Any, src_root: Path) -> bool:
+    paths = list(getattr(module, "__path__", []) or [])
+    module_file = getattr(module, "__file__", None)
+    if module_file:
+        paths.append(str(module_file))
+    if not paths:
+        return False
+    for raw_path in paths:
+        try:
+            loaded_path = Path(str(raw_path)).resolve(strict=False)
+        except OSError:
+            continue
+        if loaded_path == src_root or src_root in loaded_path.parents:
+            return True
+    return False
 
 
 def _render_reply_from_advisory(advisory: dict) -> tuple[str, str, str]:
@@ -7740,7 +7769,7 @@ def _build_active_context_status_reply(
             next_steps.append(
                 f'If the sample looks right, mark "{current_focus}" closed and set the next focus.'
             )
-        if (current_focus or transition_new_focus) == "persistent memory quality evaluation":
+        if current_focus == "persistent memory quality evaluation" or transition_new_focus == "persistent memory quality evaluation":
             next_steps = [
                 "Evaluate whether current focus updates survive across a new turn.",
                 "Test open-ended recall against the same facts without triggering deterministic helper routes.",
@@ -14589,7 +14618,7 @@ def build_researcher_reply(
                 )
                 return ResearcherBridgeResult(
                     request_id=request_id,
-                    reply_text=f"[Spark Researcher bridge error] {exc}",
+                    reply_text="[Spark Researcher bridge error] An internal error occurred while processing your request.",
                     evidence_summary="External bridge failed closed.",
                     escalation_hint="bridge_error",
                     trace_ref=f"trace:{agent_id}:{human_id}:{request_id}",
