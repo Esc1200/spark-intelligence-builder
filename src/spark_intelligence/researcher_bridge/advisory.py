@@ -3556,6 +3556,8 @@ def _resolve_spark_character_provider(env_map: dict[str, str]):
 
 
 _ACTIVE_PERSONALITY_CACHE: str | None = None
+_ACTIVE_PERSONALITY_CACHE_TS: float = 0.0
+_ACTIVE_PERSONALITY_CACHE_TTL: float = 300.0  # 5 minutes
 
 
 def _resolve_active_personality_chip_id() -> str:
@@ -3569,20 +3571,24 @@ def _resolve_active_personality_chip_id() -> str:
          (system-wide active personality set via the chip lab UI / CLI).
       4. Fallback to founder-operator.
 
-    Cached per process. Restart the gateway to pick up a switch.
+    Cached for 5 minutes. Personality switches are picked up automatically.
     """
-    global _ACTIVE_PERSONALITY_CACHE
-    if _ACTIVE_PERSONALITY_CACHE is not None:
+    global _ACTIVE_PERSONALITY_CACHE, _ACTIVE_PERSONALITY_CACHE_TS
+    now = time.time()
+    if _ACTIVE_PERSONALITY_CACHE is not None and (now - _ACTIVE_PERSONALITY_CACHE_TS) < _ACTIVE_PERSONALITY_CACHE_TTL:
         return _ACTIVE_PERSONALITY_CACHE
+    _ACTIVE_PERSONALITY_CACHE = None
     # 1. Operator override
     env_override = (os.environ.get("SPARK_INTELLIGENCE_PERSONALITY") or "").strip()
     if env_override:
         _ACTIVE_PERSONALITY_CACHE = env_override
+        _ACTIVE_PERSONALITY_CACHE_TS = time.time()
         return _ACTIVE_PERSONALITY_CACHE
     # 2. SIB workspace-level (agent_persona_profiles)
     sib_active = _read_sib_active_personality_id()
     if sib_active:
         _ACTIVE_PERSONALITY_CACHE = sib_active
+        _ACTIVE_PERSONALITY_CACHE_TS = time.time()
         return _ACTIVE_PERSONALITY_CACHE
     # 3. Chip lab system-wide
     try:
@@ -3590,11 +3596,13 @@ def _resolve_active_personality_chip_id() -> str:
         active = get_active_personality_id()
         if active:
             _ACTIVE_PERSONALITY_CACHE = str(active)
+            _ACTIVE_PERSONALITY_CACHE_TS = time.time()
             return _ACTIVE_PERSONALITY_CACHE
     except Exception:
         pass
     # 4. Fallback
     _ACTIVE_PERSONALITY_CACHE = "founder-operator"
+    _ACTIVE_PERSONALITY_CACHE_TS = time.time()
     return _ACTIVE_PERSONALITY_CACHE
 
 
